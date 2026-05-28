@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     const form = new FormData();
     form.append("image", primaryFile, primaryFile.name);
 
-    for (const key of ["image_front", "image_left", "image_right", "image_back"]) {
+    for (const key of ["image_front", "image_left", "image_right", "image_back", "image_top", "image_bottom"]) {
       const value = incoming.get(key);
       if (value instanceof File) {
         assertImageFile(value);
@@ -25,7 +25,17 @@ export async function POST(request: Request) {
       }
     }
 
-    for (const key of ["texture_resolution", "remesh_option", "target_vertex_count", "foreground_ratio", "drop_lower_ratio", "view_mode"]) {
+    for (const key of [
+      "texture_resolution",
+      "remesh_option",
+      "target_vertex_count",
+      "foreground_ratio",
+      "drop_lower_ratio",
+      "tripo_quality",
+      "instantmesh_config",
+      "view_mode",
+      "provider_choice",
+    ]) {
       const value = incoming.get(key);
       if (typeof value === "string") form.append(key, value);
     }

@@ -12,10 +12,18 @@ export type GenerationJob = {
   logs_tail?: string | null;
 };
 
+export type ProviderKey = "sf3d" | "tripo3d" | "instantmesh";
+
 export type GenerationSettings = {
+  provider: ProviderKey;
+  // SF3D
   textureResolution: number;
   remeshOption: "none" | "triangle" | "quad";
   targetVertexCount: number;
   foregroundRatio: number;
   dropLowerRatio: number;
+  // Tripo3D
+  tripoQuality: "standard" | "detailed";
+  // InstantMesh
+  instantmeshConfig: "instant-mesh-large" | "instant-mesh-base";
 };

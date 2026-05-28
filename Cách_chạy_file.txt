@@ -11,6 +11,8 @@ set SF3D_CLEAN_MIN_AREA_RATIO=0.025
 set SF3D_CLEAN_KEEP_AREA_RATIO=0.985
 set SF3D_CLEAN_MIN_FACES=1
 set SF3D_CLEAN_DROP_LOWER_RATIO=0
+set SF3D_CLEAR_PROXY=1
+set SF3D_HF_OFFLINE=1
 
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8010
 ```
