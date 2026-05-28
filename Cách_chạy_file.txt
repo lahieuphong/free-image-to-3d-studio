@@ -1,0 +1,47 @@
+**Terminal 1: tắt worker mock**
+
+```cmd
+cd /d E:\Phong_Nho_IT\free-image-to-3d-studio\ai-worker
+
+set AI_PROVIDER=sf3d
+set SF3D_REPO_PATH=E:\Phong_Nho_IT\free-image-to-3d-studio\third_party\stable-fast-3d
+set PYTHON_BIN=E:\Phong_Nho_IT\free-image-to-3d-studio\third_party\stable-fast-3d\.venv\Scripts\python.exe
+
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8010
+```
+
+**Terminal 2: kiểm tra**
+Chạy:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8010/api/health
+```
+
+Phải ra:
+
+```txt
+provider sf3d
+```
+
+Nếu còn `mock` là Terminal 1 vẫn chưa set đúng biến.
+
+**Terminal 3: sửa `.env.local` bằng cmd**
+
+```cmd
+cd /d E:\Phong_Nho_IT\free-image-to-3d-studio
+
+(
+echo AI_WORKER_URL=http://127.0.0.1:8010
+echo NEXT_PUBLIC_MAX_UPLOAD_MB=20
+) > .env.local
+
+yarn dev
+```
+
+Sau đó mở:
+
+```txt
+http://localhost:3000
+```
+
+Trên web: chọn ảnh → `Texture 1024`, `Remesh None`, `Target vertices -1`, `Foreground ratio 0.85` hoặc `0.9` → **Generate GLB**.
