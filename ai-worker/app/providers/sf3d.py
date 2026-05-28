@@ -23,6 +23,47 @@ class StableFast3DProvider(Provider):
                 "Không tìm thấy Stable Fast 3D repo. Hãy clone repo vào SF3D_REPO_PATH hoặc chạy scripts/setup-sf3d.sh."
             )
 
+    def _clean_model(self, *, job_id: str, store: JobStore, input_path: Path, options: GenerateOptions) -> Path:
+        if os.getenv("SF3D_CLEAN_ARTIFACTS", "1").strip().lower() in {"0", "false", "no", "off"}:
+            return input_path
+
+        output_path = input_path.with_name("model.cleaned.glb")
+        drop_lower_ratio = (
+            str(options.drop_lower_ratio)
+            if options.drop_lower_ratio > 0
+            else os.getenv("SF3D_CLEAN_DROP_LOWER_RATIO", "0").strip()
+        )
+        process = subprocess.run(
+            [
+                self.python_bin,
+                str(Path(__file__).with_name("clean_glb.py")),
+                str(input_path),
+                str(output_path),
+                "--min-area-ratio",
+                os.getenv("SF3D_CLEAN_MIN_AREA_RATIO", "0.025").strip(),
+                "--keep-area-ratio",
+                os.getenv("SF3D_CLEAN_KEEP_AREA_RATIO", "0.985").strip(),
+                "--min-faces",
+                os.getenv("SF3D_CLEAN_MIN_FACES", "1").strip(),
+                "--drop-lower-ratio",
+                drop_lower_ratio,
+            ],
+            cwd=self.repo_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        logs = "\n".join(part for part in [process.stdout.strip(), process.stderr.strip()] if part)
+        if logs:
+            store.append_logs(job_id, logs)
+
+        if process.returncode != 0 or not output_path.exists():
+            store.append_logs(job_id, "GLB cleanup failed; using original SF3D output.")
+            return input_path
+
+        return output_path
+
     def generate(self, *, job_id: str, store: JobStore, options: GenerateOptions) -> None:
         self._validate()
         job_dir = store.job_dir(job_id)
@@ -45,6 +86,9 @@ class StableFast3DProvider(Provider):
             "--foreground-ratio",
             str(options.foreground_ratio),
         ]
+        device = os.getenv("SF3D_DEVICE", "").strip()
+        if device:
+            cmd.extend(["--device", device])
 
         store.update(job_id, status="running", progress=8, logs_tail="Starting Stable Fast 3D...")
         env = os.environ.copy()
@@ -76,7 +120,8 @@ class StableFast3DProvider(Provider):
         if not candidates:
             raise FileNotFoundError("Stable Fast 3D đã chạy xong nhưng không tìm thấy file .glb trong output.")
 
-        shutil.copyfile(candidates[0], store.result_path(job_id))
+        final_model_path = self._clean_model(job_id=job_id, store=store, input_path=candidates[0], options=options)
+        shutil.copyfile(final_model_path, store.result_path(job_id))
         store.update(
             job_id,
             status="succeeded",

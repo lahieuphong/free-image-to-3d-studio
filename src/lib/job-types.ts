@@ -17,4 +17,5 @@ export type GenerationSettings = {
   remeshOption: "none" | "triangle" | "quad";
   targetVertexCount: number;
   foregroundRatio: number;
+  dropLowerRatio: number;
 };

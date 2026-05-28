@@ -129,6 +129,10 @@ Worker env:
 AI_PROVIDER=mock       # hoặc sf3d
 SF3D_REPO_PATH=../third_party/stable-fast-3d
 PYTHON_BIN=../third_party/stable-fast-3d/.venv/bin/python
+SF3D_CLEAN_ARTIFACTS=1
+SF3D_CLEAN_MIN_AREA_RATIO=0.025
+SF3D_CLEAN_KEEP_AREA_RATIO=0.985
+SF3D_CLEAN_DROP_LOWER_RATIO=0
 STORAGE_DIR=./storage
 PUBLIC_BASE_URL=http://localhost:8000
 MAX_UPLOAD_MB=20
@@ -145,7 +149,8 @@ curl -X POST http://localhost:8000/api/jobs \
   -F "texture_resolution=1024" \
   -F "remesh_option=none" \
   -F "target_vertex_count=-1" \
-  -F "foreground_ratio=0.85"
+  -F "foreground_ratio=0.85" \
+  -F "drop_lower_ratio=0"
 ```
 
 Lấy trạng thái:

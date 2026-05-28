@@ -6,18 +6,26 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   try {
     const incoming = await request.formData();
-    const file = incoming.get("image");
+    const primaryFile = incoming.get("image_front") ?? incoming.get("image");
 
-    if (!(file instanceof File)) {
+    if (!(primaryFile instanceof File)) {
       return NextResponse.json({ error: "Thiếu file ảnh." }, { status: 400 });
     }
 
-    assertImageFile(file);
+    assertImageFile(primaryFile);
 
     const form = new FormData();
-    form.append("image", file, file.name);
+    form.append("image", primaryFile, primaryFile.name);
 
-    for (const key of ["texture_resolution", "remesh_option", "target_vertex_count", "foreground_ratio"]) {
+    for (const key of ["image_front", "image_left", "image_right", "image_back"]) {
+      const value = incoming.get(key);
+      if (value instanceof File) {
+        assertImageFile(value);
+        form.append(key, value, value.name);
+      }
+    }
+
+    for (const key of ["texture_resolution", "remesh_option", "target_vertex_count", "foreground_ratio", "drop_lower_ratio", "view_mode"]) {
       const value = incoming.get(key);
       if (typeof value === "string") form.append(key, value);
     }

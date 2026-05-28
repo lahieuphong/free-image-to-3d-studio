@@ -6,6 +6,11 @@ cd /d E:\Phong_Nho_IT\free-image-to-3d-studio\ai-worker
 set AI_PROVIDER=sf3d
 set SF3D_REPO_PATH=E:\Phong_Nho_IT\free-image-to-3d-studio\third_party\stable-fast-3d
 set PYTHON_BIN=E:\Phong_Nho_IT\free-image-to-3d-studio\third_party\stable-fast-3d\.venv\Scripts\python.exe
+set SF3D_CLEAN_ARTIFACTS=1
+set SF3D_CLEAN_MIN_AREA_RATIO=0.025
+set SF3D_CLEAN_KEEP_AREA_RATIO=0.985
+set SF3D_CLEAN_MIN_FACES=1
+set SF3D_CLEAN_DROP_LOWER_RATIO=0
 
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8010
 ```

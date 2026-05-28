@@ -12,6 +12,7 @@ class GenerateOptions:
     remesh_option: str = "none"
     target_vertex_count: int = -1
     foreground_ratio: float = 0.85
+    drop_lower_ratio: float = 0.0
 
 
 class Provider(ABC):

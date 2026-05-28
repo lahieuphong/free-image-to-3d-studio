@@ -8,13 +8,67 @@ const DEFAULT_SETTINGS: GenerationSettings = {
   textureResolution: 1024,
   remeshOption: "none",
   targetVertexCount: -1,
-  foregroundRatio: 0.85
+  foregroundRatio: 0.85,
+  dropLowerRatio: 0
 };
 
 const MAX_UPLOAD_MB = Number(process.env.NEXT_PUBLIC_MAX_UPLOAD_MB ?? "20");
 const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const QUALITY_PRESETS: Array<{ label: string; hint: string; settings: GenerationSettings }> = [
+  {
+    label: "Cân bằng",
+    hint: "Ổn cho đa số ảnh",
+    settings: { textureResolution: 1024, remeshOption: "none", targetVertexCount: -1, foregroundRatio: 0.85, dropLowerRatio: 0 }
+  },
+  {
+    label: "Đẹp",
+    hint: "Texture rõ hơn",
+    settings: { textureResolution: 2048, remeshOption: "none", targetVertexCount: -1, foregroundRatio: 0.85, dropLowerRatio: 0 }
+  },
+  {
+    label: "Nón sạch",
+    hint: "Bỏ quai/mảng rời",
+    settings: { textureResolution: 2048, remeshOption: "none", targetVertexCount: -1, foregroundRatio: 0.75, dropLowerRatio: 0.42 }
+  },
+  {
+    label: "Web nhẹ",
+    hint: "File gọn hơn",
+    settings: { textureResolution: 1024, remeshOption: "triangle", targetVertexCount: 20000, foregroundRatio: 0.85, dropLowerRatio: 0 }
+  }
+];
 
 type Stage = "idle" | "queued" | "running" | "succeeded" | "failed";
+type ImageDimensions = { width: number; height: number };
+type InputMode = "single" | "four";
+type ViewKey = "front" | "left" | "right" | "back";
+
+const VIEW_SLOTS: Array<{ key: ViewKey; label: string; shortLabel: string }> = [
+  { key: "front", label: "Trước", shortLabel: "Trước" },
+  { key: "left", label: "Bên trái", shortLabel: "Trái" },
+  { key: "right", label: "Bên phải", shortLabel: "Phải" },
+  { key: "back", label: "Mặt sau", shortLabel: "Sau" }
+];
+
+const EMPTY_VIEW_FILES: Record<ViewKey, File | null> = {
+  front: null,
+  left: null,
+  right: null,
+  back: null
+};
+
+const EMPTY_VIEW_URLS: Record<ViewKey, string | null> = {
+  front: null,
+  left: null,
+  right: null,
+  back: null
+};
+
+const EMPTY_VIEW_DIMENSIONS: Record<ViewKey, ImageDimensions | null> = {
+  front: null,
+  left: null,
+  right: null,
+  back: null
+};
 
 function formatBytes(bytes: number) {
   if (bytes === 0) return "0 B";
@@ -30,10 +84,45 @@ async function readError(response: Response) {
   return "Có lỗi khi gọi AI worker.";
 }
 
+function loadImageDimensions(url: string) {
+  return new Promise<ImageDimensions>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
+    image.onerror = reject;
+    image.src = url;
+  });
+}
+
+function setJobQuery(jobId: string | null) {
+  const url = new URL(window.location.href);
+  if (jobId) {
+    url.searchParams.set("job", jobId);
+  } else {
+    url.searchParams.delete("job");
+  }
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function getImageFileError(nextFile: File) {
+  if (!ALLOWED_TYPES.has(nextFile.type)) {
+    return "Chỉ hỗ trợ PNG, JPG/JPEG hoặc WEBP.";
+  }
+  if (nextFile.size > MAX_UPLOAD_MB * 1024 * 1024) {
+    return `File vượt quá ${MAX_UPLOAD_MB}MB.`;
+  }
+  return null;
+}
+
 export function GeneratorPanel() {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [inputMode, setInputMode] = useState<InputMode>("single");
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [imageDimensions, setImageDimensions] = useState<ImageDimensions | null>(null);
+  const [viewFiles, setViewFiles] = useState<Record<ViewKey, File | null>>(EMPTY_VIEW_FILES);
+  const [viewPreviewUrls, setViewPreviewUrls] = useState<Record<ViewKey, string | null>>(EMPTY_VIEW_URLS);
+  const [viewDimensions, setViewDimensions] = useState<Record<ViewKey, ImageDimensions | null>>(EMPTY_VIEW_DIMENSIONS);
+  const [draggingView, setDraggingView] = useState<ViewKey | null>(null);
   const [settings, setSettings] = useState<GenerationSettings>(DEFAULT_SETTINGS);
   const [job, setJob] = useState<GenerationJob | null>(null);
   const [stage, setStage] = useState<Stage>("idle");
@@ -50,6 +139,47 @@ export function GeneratorPanel() {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
   }, [previewUrl]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(viewPreviewUrls).forEach((url) => {
+        if (url) URL.revokeObjectURL(url);
+      });
+    };
+  }, [viewPreviewUrls]);
+
+  useEffect(() => {
+    const jobId = new URLSearchParams(window.location.search).get("job");
+    if (!jobId) return;
+    const restoredJobId = jobId;
+
+    let isCancelled = false;
+    async function loadJobFromUrl() {
+      const response = await fetch(`/api/jobs/${encodeURIComponent(restoredJobId)}`, { cache: "no-store" });
+      if (isCancelled) return;
+      if (!response.ok) {
+        setError(await readError(response));
+        setStage("failed");
+        return;
+      }
+
+      const restoredJob = (await response.json()) as GenerationJob;
+      setJob(restoredJob);
+      setStage(restoredJob.status);
+      if (restoredJob.status === "failed") setError(restoredJob.error ?? "AI worker xử lý thất bại.");
+    }
+
+    loadJobFromUrl().catch(() => {
+      if (!isCancelled) {
+        setError("Không tải được job từ URL.");
+        setStage("failed");
+      }
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!job || job.status === "succeeded" || job.status === "failed") return;
@@ -72,7 +202,7 @@ export function GeneratorPanel() {
   }, [job]);
 
   const validateAndSetFile = useCallback(
-    (nextFile: File) => {
+    async (nextFile: File) => {
       setError(null);
       if (!ALLOWED_TYPES.has(nextFile.type)) {
         setError("Chỉ hỗ trợ PNG, JPG/JPEG hoặc WEBP.");
@@ -84,10 +214,14 @@ export function GeneratorPanel() {
       }
 
       if (previewUrl) URL.revokeObjectURL(previewUrl);
+      const nextPreviewUrl = URL.createObjectURL(nextFile);
       setFile(nextFile);
-      setPreviewUrl(URL.createObjectURL(nextFile));
+      setPreviewUrl(nextPreviewUrl);
+      setImageDimensions(null);
+      loadImageDimensions(nextPreviewUrl).then(setImageDimensions).catch(() => setImageDimensions(null));
       setJob(null);
       setStage("idle");
+      setJobQuery(null);
     },
     [previewUrl]
   );
@@ -104,19 +238,78 @@ export function GeneratorPanel() {
     if (nextFile) validateAndSetFile(nextFile);
   };
 
+  const setViewFile = useCallback(
+    async (key: ViewKey, nextFile: File) => {
+      setError(null);
+      const fileError = getImageFileError(nextFile);
+      if (fileError) {
+        setError(fileError);
+        return;
+      }
+
+      const nextPreviewUrl = URL.createObjectURL(nextFile);
+      setViewFiles((current) => ({ ...current, [key]: nextFile }));
+      setViewPreviewUrls((current) => {
+        if (current[key]) URL.revokeObjectURL(current[key]);
+        return { ...current, [key]: nextPreviewUrl };
+      });
+      setViewDimensions((current) => ({ ...current, [key]: null }));
+      loadImageDimensions(nextPreviewUrl)
+        .then((dimensions) => setViewDimensions((current) => ({ ...current, [key]: dimensions })))
+        .catch(() => setViewDimensions((current) => ({ ...current, [key]: null })));
+      setJob(null);
+      setStage("idle");
+      setJobQuery(null);
+    },
+    []
+  );
+
+  const handleViewInputChange = (key: ViewKey, event: React.ChangeEvent<HTMLInputElement>) => {
+    const nextFile = event.target.files?.[0];
+    if (nextFile) setViewFile(key, nextFile);
+  };
+
+  const handleViewDrop = (key: ViewKey, event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDraggingView(null);
+    const nextFile = event.dataTransfer.files?.[0];
+    if (nextFile) setViewFile(key, nextFile);
+  };
+
   const clearFile = () => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
     setFile(null);
+    setImageDimensions(null);
     setJob(null);
     setStage("idle");
     setError(null);
+    setJobQuery(null);
     if (inputRef.current) inputRef.current.value = "";
   };
 
+  const clearViewFiles = () => {
+    Object.values(viewPreviewUrls).forEach((url) => {
+      if (url) URL.revokeObjectURL(url);
+    });
+    setViewFiles({ ...EMPTY_VIEW_FILES });
+    setViewPreviewUrls({ ...EMPTY_VIEW_URLS });
+    setViewDimensions({ ...EMPTY_VIEW_DIMENSIONS });
+    setJob(null);
+    setStage("idle");
+    setError(null);
+    setJobQuery(null);
+  };
+
   const submit = async () => {
-    if (!file) {
+    if (inputMode === "single" && !file) {
       setError("Bạn cần chọn một ảnh trước.");
+      return;
+    }
+
+    const missingFourViewSlots = VIEW_SLOTS.filter((slot) => !viewFiles[slot.key]);
+    if (inputMode === "four" && missingFourViewSlots.length > 0) {
+      setError(`Bạn cần đủ 4 ảnh: còn thiếu ${missingFourViewSlots.map((slot) => slot.label).join(", ")}.`);
       return;
     }
 
@@ -125,11 +318,27 @@ export function GeneratorPanel() {
     setJob(null);
 
     const form = new FormData();
-    form.append("image", file, file.name);
+    form.append("view_mode", inputMode);
+    if (inputMode === "single" && file) {
+      form.append("image", file, file.name);
+    }
+    if (inputMode === "four") {
+      const frontFile = viewFiles.front;
+      const leftFile = viewFiles.left;
+      const rightFile = viewFiles.right;
+      const backFile = viewFiles.back;
+      if (frontFile && leftFile && rightFile && backFile) {
+        form.append("image_front", frontFile, frontFile.name);
+        form.append("image_left", leftFile, leftFile.name);
+        form.append("image_right", rightFile, rightFile.name);
+        form.append("image_back", backFile, backFile.name);
+      }
+    }
     form.append("texture_resolution", String(settings.textureResolution));
     form.append("remesh_option", settings.remeshOption);
     form.append("target_vertex_count", String(settings.targetVertexCount));
     form.append("foreground_ratio", String(settings.foregroundRatio));
+    form.append("drop_lower_ratio", String(settings.dropLowerRatio));
 
     const response = await fetch("/api/jobs", {
       method: "POST",
@@ -145,10 +354,13 @@ export function GeneratorPanel() {
     const created = (await response.json()) as GenerationJob;
     setJob(created);
     setStage(created.status);
+    setJobQuery(created.id);
   };
 
   const isBusy = stage === "queued" || stage === "running";
   const progress = Math.max(0, Math.min(100, Math.round(job?.progress ?? (isBusy ? 6 : 0))));
+  const hasAllViewFiles = VIEW_SLOTS.every((slot) => Boolean(viewFiles[slot.key]));
+  const canSubmit = inputMode === "single" ? Boolean(file) : hasAllViewFiles;
 
   return (
     <main className="shell">
@@ -176,6 +388,31 @@ export function GeneratorPanel() {
             <span className="badge">Free self-host</span>
           </div>
 
+          <div className="mode-tabs" role="tablist" aria-label="Input mode">
+            <button
+              className={inputMode === "single" ? "is-active" : ""}
+              type="button"
+              role="tab"
+              aria-selected={inputMode === "single"}
+              onClick={() => setInputMode("single")}
+              disabled={isBusy}
+            >
+              1 ảnh
+            </button>
+            <button
+              className={inputMode === "four" ? "is-active" : ""}
+              type="button"
+              role="tab"
+              aria-selected={inputMode === "four"}
+              onClick={() => setInputMode("four")}
+              disabled={isBusy}
+            >
+              4 góc
+            </button>
+          </div>
+
+          {inputMode === "single" ? (
+            <>
           <div
             className={`upload-zone ${isDragging ? "is-dragging" : ""} ${previewUrl ? "has-preview" : ""}`}
             onDragOver={(event) => {
@@ -211,12 +448,95 @@ export function GeneratorPanel() {
                 <strong>{file.name}</strong>
                 <br />
                 {formatBytes(file.size)} · {file.type}
+                {imageDimensions ? ` · ${imageDimensions.width}x${imageDimensions.height}px` : ""}
               </span>
               <button className="secondary-button" type="button" onClick={clearFile} disabled={isBusy}>
                 Xóa
               </button>
             </div>
           )}
+
+          {imageDimensions && Math.max(imageDimensions.width, imageDimensions.height) < 1024 && (
+            <div className="quality-warning">
+              Ảnh hơi nhỏ ({imageDimensions.width}x{imageDimensions.height}px). Dùng ảnh gốc từ 1024px trở lên sẽ giúp texture và hình khối sắc hơn.
+            </div>
+          )}
+
+            </>
+          ) : (
+            <div className="four-view-panel">
+              <div className="four-view-grid">
+                {VIEW_SLOTS.map((slot) => {
+                  const fileForSlot = viewFiles[slot.key];
+                  const previewForSlot = viewPreviewUrls[slot.key];
+                  const dimensionsForSlot = viewDimensions[slot.key];
+
+                  return (
+                    <div
+                      key={slot.key}
+                      className={`view-slot ${slot.key === "front" ? "view-slot-front" : ""} ${
+                        draggingView === slot.key ? "is-dragging" : ""
+                      } ${previewForSlot ? "has-preview" : ""}`}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        setDraggingView(slot.key);
+                      }}
+                      onDragLeave={() => setDraggingView(null)}
+                      onDrop={(event) => handleViewDrop(slot.key, event)}
+                    >
+                      <input
+                        key={`${slot.key}-${previewForSlot ? "filled" : "empty"}`}
+                        className="file-input"
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        onChange={(event) => handleViewInputChange(slot.key, event)}
+                        aria-label={`Upload ${slot.label}`}
+                        disabled={isBusy}
+                      />
+                      {previewForSlot ? (
+                        <img className="view-slot-image" src={previewForSlot} alt={slot.label} />
+                      ) : (
+                        <div className="view-slot-empty">
+                          <span>{slot.shortLabel}</span>
+                          <small>PNG/JPG/WEBP</small>
+                        </div>
+                      )}
+                      <div className="view-slot-label">
+                        <strong>{slot.label}</strong>
+                        {fileForSlot && dimensionsForSlot ? <span>{dimensionsForSlot.width}x{dimensionsForSlot.height}</span> : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="four-view-meta">
+                <span>{VIEW_SLOTS.filter((slot) => viewFiles[slot.key]).length}/4 ảnh đã chọn</span>
+                <button className="secondary-button compact-button" type="button" onClick={clearViewFiles} disabled={isBusy}>
+                  Xóa
+                </button>
+              </div>
+
+              <div className="quality-warning">
+                Chế độ này đang lưu đủ 4 góc để thử nghiệm. Stable Fast 3D hiện vẫn dựng từ ảnh Trước, nên nếu muốn multi-view thật cần đổi provider ở bước sau.
+              </div>
+            </div>
+          )}
+
+          <div className="preset-grid" aria-label="Quality presets">
+            {QUALITY_PRESETS.map((preset) => (
+              <button
+                key={preset.label}
+                className="preset-button"
+                type="button"
+                onClick={() => setSettings(preset.settings)}
+                disabled={isBusy}
+              >
+                <strong>{preset.label}</strong>
+                <span>{preset.hint}</span>
+              </button>
+            ))}
+          </div>
 
           <div className="settings-grid">
             <div className="form-row">
@@ -278,15 +598,29 @@ export function GeneratorPanel() {
                   disabled={isBusy}
                 />
               </div>
+
+              <div className="field">
+                <label htmlFor="drop-lower-ratio">Lower cleanup</label>
+                <input
+                  id="drop-lower-ratio"
+                  type="number"
+                  min={0}
+                  max={0.8}
+                  step={0.01}
+                  value={settings.dropLowerRatio}
+                  onChange={(event) => setSettings((current) => ({ ...current, dropLowerRatio: Number(event.target.value) }))}
+                  disabled={isBusy}
+                />
+              </div>
             </div>
           </div>
 
           <div className="action-row">
-            <button className="primary-button" type="button" onClick={submit} disabled={!file || isBusy}>
+            <button className="primary-button" type="button" onClick={submit} disabled={!canSubmit || isBusy}>
               {isBusy ? "Đang generate..." : "Generate GLB"}
             </button>
-            <button className="secondary-button" type="button" onClick={() => inputRef.current?.click()} disabled={isBusy}>
-              Chọn ảnh
+            <button className="secondary-button" type="button" onClick={() => inputRef.current?.click()} disabled={isBusy || inputMode === "four"}>
+              {inputMode === "four" ? "Chọn từng góc" : "Chọn ảnh"}
             </button>
           </div>
 
