@@ -122,6 +122,35 @@ class StableFast3DProvider(Provider):
 
         return output_path, True
 
+    def _enhance_texture(self, *, job_id: str, store: JobStore, input_path: Path) -> Path:
+        if os.getenv("SF3D_ENHANCE_TEXTURE", "1").strip().lower() in {"0", "false", "no", "off"}:
+            return input_path
+
+        output_path = input_path.with_name("model.enhanced.glb")
+        process = subprocess.run(
+            [
+                self.python_bin,
+                str(Path(__file__).with_name("enhance_glb_texture.py")),
+                str(input_path),
+                str(output_path),
+            ],
+            cwd=self.repo_path,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=self._build_env(),
+        )
+
+        logs = "\n".join(part for part in [process.stdout.strip(), process.stderr.strip()] if part)
+        if logs:
+            store.append_logs(job_id, logs)
+
+        if process.returncode != 0 or not output_path.exists():
+            store.append_logs(job_id, "Texture enhancement failed; using cleaned GLB.")
+            return input_path
+
+        return output_path
+
     def _clean_model(self, *, job_id: str, store: JobStore, input_path: Path, options: GenerateOptions) -> Path:
         if os.getenv("SF3D_CLEAN_ARTIFACTS", "1").strip().lower() in {"0", "false", "no", "off"}:
             return input_path
@@ -227,7 +256,9 @@ class StableFast3DProvider(Provider):
         if not candidates:
             raise FileNotFoundError("Stable Fast 3D đã chạy xong nhưng không tìm thấy file .glb trong output.")
 
-        final_model_path = self._clean_model(job_id=job_id, store=store, input_path=candidates[0], options=options)
+        cleaned_path = self._clean_model(job_id=job_id, store=store, input_path=candidates[0], options=options)
+        store.update(job_id, progress=96, logs_tail="Enhancing texture sharpness...")
+        final_model_path = self._enhance_texture(job_id=job_id, store=store, input_path=cleaned_path)
         shutil.copyfile(final_model_path, store.result_path(job_id))
         store.update(
             job_id,

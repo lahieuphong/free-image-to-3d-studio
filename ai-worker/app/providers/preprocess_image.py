@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 
 
 def _has_transparency(img: Image.Image) -> bool:
@@ -88,6 +88,14 @@ def preprocess(
 
     if padded.width != target_size or padded.height != target_size:
         padded = padded.resize((target_size, target_size), Image.LANCZOS)
+
+    # Sharpen RGB channels to give SF3D sharper edges and texture detail (preserve alpha)
+    r, g, b, a = padded.split()
+    rgb = Image.merge("RGB", (r, g, b))
+    rgb = rgb.filter(ImageFilter.UnsharpMask(radius=1.5, percent=120, threshold=2))
+    rgb = ImageEnhance.Sharpness(rgb).enhance(1.6)
+    r, g, b = rgb.split()
+    padded = Image.merge("RGBA", (r, g, b, a))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     padded.save(output_path, "PNG")
