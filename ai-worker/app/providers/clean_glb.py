@@ -22,12 +22,21 @@ def _set_double_sided(mesh: trimesh.Trimesh) -> None:
 
 
 def _repair_mesh(mesh: trimesh.Trimesh, fill_passes: int = 3) -> None:
-    """In-place: remove bad faces → multi-pass hole fill → stitch open seams → fix normals."""
-    mesh.remove_degenerate_faces()
-    mesh.remove_duplicate_faces()
+    """In-place: remove bad faces → stable-iterate hole fill → stitch open seams → fix normals."""
+    try:
+        mesh.update_faces(mesh.nondegenerate_faces())
+        mesh.update_faces(mesh.unique_faces())
+    except Exception:
+        mesh.remove_degenerate_faces()
+        mesh.remove_duplicate_faces()
+    prev_faces = -1
     for _ in range(fill_passes):
         if mesh.is_watertight:
             break
+        cur = len(mesh.faces)
+        if cur == prev_faces:
+            break
+        prev_faces = cur
         trimesh.repair.fill_holes(mesh)
     # stitch_boundaries connects nearby open boundary edges (closes seam-type gaps)
     try:
@@ -38,12 +47,99 @@ def _repair_mesh(mesh: trimesh.Trimesh, fill_passes: int = 3) -> None:
     trimesh.repair.fix_normals(mesh)
 
 
+def _fan_fill_holes(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    """Fill remaining open boundary loops via centroid fan triangulation.
+
+    Detects every open boundary loop (edges appearing in exactly one face), places a
+    centroid vertex at the loop's centre, and stitches fan triangles to close the hole.
+    Works for arbitrarily large or concave holes that ear-clipping misses.
+    UV coordinates for new centroid vertices are averaged from the hole boundary.
+    Returns a new Trimesh (or the original if watertight / nothing to do / error).
+    """
+    if mesh.is_watertight:
+        return mesh
+    try:
+        # Boundary edges appear in exactly one face
+        edge_face_counts = np.bincount(
+            mesh.faces_unique_edges.ravel(),
+            minlength=len(mesh.edges_unique),
+        )
+        boundary_mask = edge_face_counts == 1
+        if not boundary_mask.any():
+            return mesh
+
+        from collections import defaultdict
+        adj: dict[int, list[int]] = defaultdict(list)
+        for a, b in mesh.edges_unique[boundary_mask].tolist():
+            adj[a].append(b)
+            adj[b].append(a)
+
+        # Walk boundary adjacency to extract closed loops
+        visited: set[int] = set()
+        loops: list[list[int]] = []
+        for start in list(adj):
+            if start in visited:
+                continue
+            loop: list[int] = []
+            curr, prev = start, -1
+            while curr not in visited:
+                visited.add(curr)
+                loop.append(curr)
+                nxt = [n for n in adj[curr] if n != prev]
+                if not nxt:
+                    break
+                prev, curr = curr, nxt[0]
+            if len(loop) >= 3:
+                loops.append(loop)
+
+        if not loops:
+            return mesh
+
+        old_verts = mesh.vertices.copy()
+        new_verts = old_verts.tolist()
+        new_faces = mesh.faces.tolist()
+
+        uv_src = getattr(getattr(mesh, "visual", None), "uv", None)
+        has_uv = uv_src is not None and len(uv_src) == len(old_verts)
+        new_uv = uv_src.tolist() if has_uv else None
+
+        for loop in loops:
+            centroid = old_verts[loop].mean(axis=0)
+            c_idx = len(new_verts)
+            new_verts.append(centroid.tolist())
+            if has_uv:
+                new_uv.append(uv_src[loop].mean(axis=0).tolist())
+            n = len(loop)
+            for i in range(n):
+                new_faces.append([c_idx, loop[i], loop[(i + 1) % n]])
+
+        result = trimesh.Trimesh(
+            vertices=np.array(new_verts, dtype=np.float64),
+            faces=np.array(new_faces, dtype=np.int64),
+            process=False,
+        )
+        if has_uv:
+            try:
+                result.visual = trimesh.visual.TextureVisuals(
+                    uv=np.array(new_uv, dtype=np.float32),
+                    material=mesh.visual.material,
+                )
+            except Exception:
+                result.visual = mesh.visual
+        else:
+            result.visual = mesh.visual
+        trimesh.repair.fix_normals(result)
+        return result
+    except Exception:
+        return mesh
+
+
 def _pymeshfix_repair(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     """Watertight repair via PyMeshFix. UV coordinates are transferred to new vertices
     using nearest-neighbour lookup against original vertex positions.
     A trimesh cleanup pass runs after PyMeshFix to close any tiny gaps it left behind."""
     mf = _pymeshfix.MeshFix(mesh.vertices.copy(), mesh.faces.copy())
-    mf.repair(verbose=False, joincomp=True, remove_smallest_components=False)
+    mf.repair(joincomp=True, remove_smallest_components=False)
 
     if len(mf.v) == 0 or len(mf.f) == 0:
         return mesh
@@ -196,9 +292,15 @@ def clean_glb(
         for index, component in enumerate(keep):
             # Second repair pass per component after split
             _repair_mesh(component, fill_passes=3)
-            # If mesh still has holes and PyMeshFix is available, use it as a last resort
+            # PyMeshFix: topology-level watertight repair
             if not component.is_watertight and HAS_PYMESHFIX:
                 component = _pymeshfix_repair(component)
+            # Fan fill: close any boundary loops that ear-clipping and PyMeshFix missed
+            if not component.is_watertight:
+                component = _fan_fill_holes(component)
+                # One final PyMeshFix pass to clean up fan-fill seams
+                if not component.is_watertight and HAS_PYMESHFIX:
+                    component = _pymeshfix_repair(component)
             if double_sided:
                 _set_double_sided(component)
             cleaned.add_geometry(component, node_name=f"{name}_{index}")
