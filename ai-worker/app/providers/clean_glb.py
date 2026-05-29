@@ -1,15 +1,118 @@
 from __future__ import annotations
 
 import argparse
+import json
+import struct
 from pathlib import Path
 
+import numpy as np
 import trimesh
+
+try:
+    import pymeshfix as _pymeshfix
+    HAS_PYMESHFIX = True
+except ImportError:
+    HAS_PYMESHFIX = False
 
 
 def _set_double_sided(mesh: trimesh.Trimesh) -> None:
     material = getattr(getattr(mesh, "visual", None), "material", None)
     if material is not None and hasattr(material, "doubleSided"):
         material.doubleSided = True
+
+
+def _repair_mesh(mesh: trimesh.Trimesh, fill_passes: int = 3) -> None:
+    """In-place: remove bad faces → multi-pass hole fill → stitch open seams → fix normals."""
+    mesh.remove_degenerate_faces()
+    mesh.remove_duplicate_faces()
+    for _ in range(fill_passes):
+        if mesh.is_watertight:
+            break
+        trimesh.repair.fill_holes(mesh)
+    # stitch_boundaries connects nearby open boundary edges (closes seam-type gaps)
+    try:
+        trimesh.repair.stitch_boundaries(mesh)
+        trimesh.repair.fill_holes(mesh)
+    except Exception:
+        pass
+    trimesh.repair.fix_normals(mesh)
+
+
+def _pymeshfix_repair(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    """Watertight repair via PyMeshFix. UV coordinates are transferred to new vertices
+    using nearest-neighbour lookup against original vertex positions.
+    A trimesh cleanup pass runs after PyMeshFix to close any tiny gaps it left behind."""
+    mf = _pymeshfix.MeshFix(mesh.vertices.copy(), mesh.faces.copy())
+    mf.repair(verbose=False, joincomp=True, remove_smallest_components=False)
+
+    if len(mf.v) == 0 or len(mf.f) == 0:
+        return mesh
+
+    repaired = trimesh.Trimesh(vertices=mf.v, faces=mf.f, process=False)
+
+    # For each vertex in the repaired mesh, find the nearest vertex in the original
+    # and copy its UV. New vertices added by PyMeshFix (hole fills) inherit the UV
+    # of their closest existing neighbour, which is typically the right colour.
+    try:
+        visual = mesh.visual
+        uv = getattr(visual, "uv", None)
+        if uv is not None and len(uv) == len(mesh.vertices):
+            try:
+                from scipy.spatial import cKDTree
+                _, idx = cKDTree(mesh.vertices).query(repaired.vertices, k=1)
+            except ImportError:
+                diff = repaired.vertices[:, np.newaxis, :] - mesh.vertices[np.newaxis, :, :]
+                idx = np.einsum("ijk,ijk->ij", diff, diff).argmin(axis=1)
+            repaired.visual = trimesh.visual.TextureVisuals(
+                uv=uv[idx],
+                material=visual.material,
+            )
+        else:
+            repaired.visual = visual
+    except Exception:
+        repaired.visual = mesh.visual
+
+    # Extra trimesh pass: PyMeshFix can leave small open edges — close them now
+    trimesh.repair.fill_holes(repaired)
+    trimesh.repair.fix_normals(repaired)
+
+    return repaired
+
+
+def _patch_glb_double_sided(path: Path) -> None:
+    """Directly patch the GLTF JSON inside the GLB to set doubleSided=true on every
+    material. This is more reliable than trimesh's material API because it operates on
+    the serialized output and works regardless of trimesh's internal material type."""
+    try:
+        data = path.read_bytes()
+        magic = struct.unpack_from("<I", data, 0)[0]
+        if magic != 0x46546C67:  # 'glTF'
+            return
+        json_len = struct.unpack_from("<I", data, 12)[0]
+        raw_json = data[20 : 20 + json_len].rstrip(b"\x00 ")
+        gltf = json.loads(raw_json)
+
+        changed = False
+        for mat in gltf.get("materials", []):
+            if not mat.get("doubleSided"):
+                mat["doubleSided"] = True
+                changed = True
+        if not changed:
+            return
+
+        new_json = json.dumps(gltf, separators=(",", ":")).encode("utf-8")
+        pad = (4 - len(new_json) % 4) % 4
+        new_json_padded = new_json + b" " * pad
+
+        version = struct.unpack_from("<I", data, 4)[0]
+        old_total = struct.unpack_from("<I", data, 8)[0]
+        new_total = old_total + len(new_json_padded) - json_len
+        file_header = struct.pack("<III", magic, version, new_total)
+        chunk_header = struct.pack("<II", len(new_json_padded), 0x4E4F534A)  # 'JSON'
+        tail = data[20 + json_len :]  # binary chunk (if any)
+        path.write_bytes(file_header + chunk_header + new_json_padded + tail)
+    except Exception:
+        pass
 
 
 def _select_components(
@@ -72,6 +175,12 @@ def clean_glb(
         lower_cutoff = bounds[0][1] + (bounds[1][1] - bounds[0][1]) * drop_lower_ratio
 
     for name, geometry in scene.geometry.items():
+        # Repair the full geometry BEFORE splitting so boundary connectivity is intact.
+        # Splitting first would create new artificial open edges at split seams.
+        _repair_mesh(geometry, fill_passes=2)
+        if not geometry.is_watertight and HAS_PYMESHFIX:
+            geometry = _pymeshfix_repair(geometry)
+
         components = geometry.split(only_watertight=False)
         total_components += len(components)
         keep, kept_area_ratio = _select_components(
@@ -85,13 +194,18 @@ def clean_glb(
         kept_area_ratios.append(kept_area_ratio)
 
         for index, component in enumerate(keep):
-            trimesh.repair.fill_holes(component)
+            # Second repair pass per component after split
+            _repair_mesh(component, fill_passes=3)
+            # If mesh still has holes and PyMeshFix is available, use it as a last resort
+            if not component.is_watertight and HAS_PYMESHFIX:
+                component = _pymeshfix_repair(component)
             if double_sided:
                 _set_double_sided(component)
             cleaned.add_geometry(component, node_name=f"{name}_{index}")
         kept_components += len(keep)
 
     cleaned.export(output_path)
+    _patch_glb_double_sided(output_path)
     average_area_ratio = sum(kept_area_ratios) / len(kept_area_ratios) if kept_area_ratios else 0.0
     return total_components, kept_components, average_area_ratio
 

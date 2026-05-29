@@ -35,10 +35,10 @@ const PROVIDER_DEFAULTS: Record<ProviderKey, GenerationSettings> = {
 type Preset = { label: string; hint: string; settings: Partial<GenerationSettings> };
 
 const SF3D_PRESETS: Preset[] = [
-  { label: "Cân bằng",  hint: "Texture 1024, nhanh",           settings: { textureResolution: 1024, remeshOption: "none",     targetVertexCount: -1,    foregroundRatio: 0.85, dropLowerRatio: 0 } },
-  { label: "Đẹp",       hint: "Texture 2048, remesh quad",     settings: { textureResolution: 2048, remeshOption: "quad",     targetVertexCount: -1,    foregroundRatio: 0.85, dropLowerRatio: 0 } },
+  { label: "Cân bằng",  hint: "Texture 1024, nhanh",           settings: { textureResolution: 1024, remeshOption: "none",     targetVertexCount: -1,    foregroundRatio: 0.92, dropLowerRatio: 0 } },
+  { label: "Đẹp",       hint: "Texture 2048, chi tiết cao",    settings: { textureResolution: 2048, remeshOption: "none",     targetVertexCount: -1,    foregroundRatio: 0.92, dropLowerRatio: 0 } },
   { label: "Nón sạch",  hint: "Bỏ mảng rời, phù hợp nón/mũ",  settings: { textureResolution: 2048, remeshOption: "none",     targetVertexCount: -1,    foregroundRatio: 0.75, dropLowerRatio: 0.42 } },
-  { label: "Web nhẹ",   hint: "20k polygon, file nhỏ",         settings: { textureResolution: 1024, remeshOption: "triangle", targetVertexCount: 20000, foregroundRatio: 0.85, dropLowerRatio: 0 } },
+  { label: "Web nhẹ",   hint: "20k polygon, file nhỏ",         settings: { textureResolution: 1024, remeshOption: "triangle", targetVertexCount: 20000, foregroundRatio: 0.92, dropLowerRatio: 0 } },
 ];
 
 const TRIPO_PRESETS: Preset[] = [
