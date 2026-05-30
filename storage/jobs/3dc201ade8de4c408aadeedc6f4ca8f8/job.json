@@ -1,0 +1,23 @@
+{
+  "id": "3dc201ade8de4c408aadeedc6f4ca8f8",
+  "status": "succeeded",
+  "progress": 100,
+  "provider": "sf3d",
+  "input_filename": "multiview_0.jpeg",
+  "settings": {
+    "view_mode": "single",
+    "provider": "sf3d",
+    "texture_resolution": 2048,
+    "remesh_option": "none",
+    "target_vertex_count": -1,
+    "foreground_ratio": 0.85,
+    "drop_lower_ratio": 0.0,
+    "tripo_quality": "standard",
+    "instantmesh_config": "instant-mesh-large"
+  },
+  "created_at": "2026-05-29T06:49:02.482526+00:00",
+  "updated_at": "2026-05-29T06:49:33.452735+00:00",
+  "result_filename": "model.glb",
+  "error": null,
+  "logs_tail": "Enhancing texture sharpness...\n[enhance_texture] geometry_0.baseColorTexture: skipped ('charmap' codec can't encode character '\\u2192' in position 60: character maps to <undefined>)\nTraceback (most recent call last):\n  File \"E:\\Phong_Nho_IT\\free-image-to-3d-studio\\ai-worker\\app\\providers\\enhance_glb_texture.py\", line 124, in <module>\n    main()\n  File \"E:\\Phong_Nho_IT\\free-image-to-3d-studio\\ai-worker\\app\\providers\\enhance_glb_texture.py\", line 120, in main\n    enhance_texture(args.input_path, args.output_path)\n  File \"E:\\Phong_Nho_IT\\free-image-to-3d-studio\\ai-worker\\app\\providers\\enhance_glb_texture.py\", line 111, in enhance_texture\n    print(f\"[enhance_texture] Done — {enhanced} texture(s) enhanced \\u2192 {output_path.name}\")\n  File \"C:\\Users\\LA VIET PHONG\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\encodings\\cp1252.py\", line 19, in encode\n    return codecs.charmap_encode(input,self.errors,encoding_table)[0]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUnicodeEncodeError: 'charmap' codec can't encode character '\\u2192' in position 47: character maps to <undefined>\nTexture enhancement failed; using cleaned GLB."
+}
